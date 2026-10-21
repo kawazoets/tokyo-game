@@ -1,0 +1,239 @@
+<!doctype html><html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ぼくの東京 — 街づくり</title><style>*{box-sizing:border-box}body{margin:0;background:#e9eef2;font-family:system-ui,'Meiryo',sans-serif;color:#20323b}header{padding:12px 20px;background:#173d4a;color:white;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}header b{font-size:21px}header small{color:#bde5e9}main{display:grid;grid-template-columns:minmax(0,1fr) 255px;gap:10px;padding:10px;height:calc(100vh - 65px);min-height:550px}.stage{position:relative;overflow:hidden;border-radius:14px;background:#c8dfe5;border:2px solid #fff;box-shadow:0 2px 12px #0002}canvas{display:block;width:100%;height:100%;touch-action:none;cursor:grab}.hint{position:absolute;left:12px;bottom:12px;background:#fffffff0;padding:8px 12px;border-radius:9px;font-size:12px;pointer-events:none}.panel{overflow:auto;background:white;border-radius:14px;padding:12px;box-shadow:0 2px 10px #0001}h3{margin:8px 0;font-size:15px}button{border:1px solid #cbd8db;border-radius:8px;background:#f7fafb;padding:8px 9px;margin:3px 2px;cursor:pointer;font-weight:600;color:#234}button.sel{background:#155e75;color:white}button:hover{filter:brightness(.95)}.cards{display:flex;flex-wrap:wrap;gap:4px;max-height:280px;overflow:auto}.chip{background:#e7f3f3;border:1px solid #9cc9c8;border-radius:6px;padding:5px 7px;font-size:12px;cursor:grab;user-select:none;touch-action:none}.chip.kata{background:#fff1df;border-color:#e5bf83}.sub{font-size:12px;color:#5b6c74;line-height:1.5}.row{display:flex;flex-wrap:wrap;gap:3px}.zoom{position:absolute;right:14px;top:12px;display:flex;gap:4px}.zoom button{font-size:20px;background:#ffffffe9}.stat{font-size:12px;color:#576b70;margin-top:8px}@media(max-width:800px){main{grid-template-columns:1fr;height:auto}.stage{height:65vh;min-height:390px}.panel{max-height:410px}}</style><header><b>🚃 ぼくの東京 — 街づくり Version 15</b><small>駅名を入れると電車が停車 · 山手線30駅 · 名前を付けると停車</small></header><main><section class="stage" id="stage"><canvas id="c"></canvas><div class="zoom"><button id="plus">＋</button><button id="minus">－</button><button id="home">⌂</button></div><div class="hint" id="hint">✋ ドラッグ：街を移動　｜　🖱 ホイール：拡大・縮小</div></section><aside class="panel"><h3>🏗 街に追加する</h3><div class="row" id="tools"></div><p class="sub">建物を選んでから街をクリックすると、何個でも追加できます。「移動」に戻すと街をドラッグできます。</p><button id="undo">↶ 最後の建物を戻す</button><button id="reset">街を初期状態に</button><hr><h3>🚉 駅の名前をつける</h3><p class="sub">漢字・カタカナのカードを駅の小さな「＋」へドラッグ。名前を入れた駅では電車が約2秒停車します。</p><div class="cards" id="cards"></div><p class="stat" id="status">駅の名前は空欄です。</p></aside></main><script>
+const c=document.getElementById('c'),ctx=c.getContext('2d'),stage=document.getElementById('stage');let W=900,H=650,dpr=1,zoom=0.83,panX=0,panY=0,tool='move',buildings=[],extra=[],placed={},drag=null,cardDrag=null,hover=null,trainTime=0;const WORLD=1450,HEIGHT=1050;
+const stationNames=[['東京','トウキョウ'],['神田','カンダ'],['秋葉原','アキハバラ'],['御徒町','オカチマチ'],['上野','ウエノ'],['鶯谷','ウグイスダニ'],['日暮里','ニッポリ'],['西日暮里','ニシニッポリ'],['田端','タバタ'],['駒込','コマゴメ'],['巣鴨','スガモ'],['大塚','オオツカ'],['池袋','イケブクロ'],['目白','メジロ'],['高田馬場','タカダノババ'],['新大久保','シンオオクボ'],['新宿','シンジュク'],['代々木','ヨヨギ'],['原宿','ハラジュク'],['渋谷','シブヤ'],['恵比寿','エビス'],['目黒','メグロ'],['五反田','ゴタンダ'],['大崎','オオサキ'],['品川','シナガワ'],['高輪ゲートウェイ','タカナワゲートウェイ'],['田町','タマチ'],['浜松町','ハママツチョウ'],['新橋','シンバシ'],['有楽町','ユウラクチョウ']];
+const tools=[['move','✋ 移動'],['tower','🏙 高層ビル'],['office','🏢 オフィス'],['shop','🏬 商店'],['house','🏠 住宅'],['station','🚉 駅'],['park','🌳 公園']];document.getElementById('tools').innerHTML=tools.map(([id,name])=>`<button data-tool="${id}" class="${id==='move'?'sel':''}">${name}</button>`).join('');document.getElementById('tools').onclick=e=>{let b=e.target.closest('[data-tool]');if(!b)return;tool=b.dataset.tool;document.querySelectorAll('[data-tool]').forEach(x=>x.classList.toggle('sel',x===b));c.style.cursor=tool==='move'?'grab':'crosshair';};
+let cards=document.getElementById('cards');stationNames.forEach(([kan,kat])=>{[kan,kat].forEach((s,i)=>{let e=document.createElement('span');e.className='chip '+(i?'kata':'');e.textContent=s;e.dataset.name=s;cards.appendChild(e)})});
+// An isometric projection gives buildings real visible left and right walls.
+const iso=(x,y,z=0)=>({x:(x-y)*.78,y:(x+y)*.405-z});const track=[];for(let i=0;i<30;i++){let a=i*Math.PI*2/30-Math.PI/2;track.push({x:720+535*Math.cos(a),y:525+360*Math.sin(a)})}let stationIds=Array.from({length:30},(_,i)=>i);let stations=stationIds.map((i,k)=>({id:k,x:track[i].x,y:track[i].y,trackIndex:i}));
+function rng(n){let v=Math.sin(n*127.1+89.31)*43758.5453;return v-Math.floor(v)}function init(){buildings=[];extra=[];placed={};for(let gy=0;gy<23;gy++)for(let gx=0;gx<29;gx++){let x=24+gx*49+(gy%2)*6,y=20+gy*45;if(x>WORLD-20||y>HEIGHT-20)continue;let near=track.some(p=>Math.hypot(x-p.x,y-p.y)<44);if(near||rng(gx*51+gy*101)<.18)continue;let r=rng(gx*27+gy*66);let downtown=(x>350&&x<1000&&y>240&&y<760),east=x>1050,west=x<350;let type=downtown?(r>.81?'tower':r>.43?'office':r>.18?'shop':'house'):east?(r>.91?'tower':r>.55?'office':r>.20?'shop':'house'):west?(r>.96?'tower':r>.7?'office':r>.34?'shop':'house'):(r>.94?'tower':r>.6?'office':r>.28?'shop':'house');let h=type==='tower'?105+rng(gx+gy*12)*125:type==='office'?42+rng(gx*31+gy)*52:type==='shop'?17+rng(gx*7+gy*11)*21:19+rng(gx*91+gy)*18;buildings.push({x,y,w:24+rng(gx*41+gy)*18,d:24+rng(gx*31+gy*9)*16,h,type,seed:gx*23+gy*71})}stations.forEach(s=>{buildings=buildings.filter(b=>Math.hypot(b.x-s.x,b.y-s.y)>57)});document.getElementById('status').textContent='山手線30駅。屋根付きホームの駅名標に、好きな名前を入れてください。'}init();
+function path(pts,fill,stroke='#0000',lw=1){ctx.beginPath();pts.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y));ctx.closePath();ctx.fillStyle=fill;ctx.fill();if(stroke!=='#0000'){ctx.strokeStyle=stroke;ctx.lineWidth=lw;ctx.stroke()}}function poly(coords,fill,stroke='#0000',lw=1){path(coords.map(p=>iso(...p)),fill,stroke,lw)}function line(points,color,width=1){ctx.beginPath();points.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y));ctx.strokeStyle=color;ctx.lineWidth=width;ctx.stroke()}
+function block(b){
+ let {x,y,w,d,h,type,seed}=b;
+ if(type==='park'){poly([[x-w/2,y-d/2,2],[x+w/2,y-d/2,2],[x+w/2,y+d/2,2],[x-w/2,y+d/2,2]],'#72a77d','#528a65');for(let i=0;i<5;i++)tree(x-w/3+i*11,y+(i%2)*13);return}
+ const n=Math.floor(rng(seed+9)*1000), isTower=type==='tower',isHouse=type==='house',isShop=type==='shop';
+ // Tokyo-inspired exterior combinations: front wall, side wall, rooftop.
+ const towerPalette=[
+ ['#668da4','#a6c4d1','#c8d9df'],['#596d85','#90a4b8','#cbd5df'],
+ ['#668f89','#a1c2b6','#d0ded4'],['#8e7975','#c3aaa0','#dfd0c7'],
+ ['#6c7380','#9ca6b1','#d4d9df'],['#807d70','#b6b19c','#ded8c7'],
+ ['#527e96','#84b5cc','#bdd7e3'],['#a47d70','#d0a99b','#ead5c7'],
+ ['#677a72','#9db6a2','#d7e0d1'],['#7d728c','#afa3bc','#d8d1e2'],
+ ['#918d8a','#c6c2bf','#e5e3df'],['#4f6978','#7998aa','#b8cbd3']];
+ const officePalette=[
+ ['#7b8b90','#b4c2c6','#d6d8d5'],['#a09285','#cfc2b1','#e2ddd1'],
+ ['#718a91','#9fb5b9','#d7e0de'],['#a78672','#d5b29a','#e6d8c8'],
+ ['#8b929b','#c4cbd2','#e6e8ea'],['#b1a28d','#e0cfb5','#f0e7d8'],
+ ['#7e8d79','#b3c4a9','#dbe1d2'],['#8c7681','#c6aeb8','#e5d5dc'],
+ ['#7b93a4','#b3cbd9','#e1eaf0'],['#9c9b8a','#d0cdb9','#ebe9dc'],
+ ['#9d756a','#d3a99a','#ebd1c6'],['#797e84','#adb6bb','#d9ddde']];
+ const shopPalette=[
+ ['#b78b79','#e6c4a5','#ead7b9'],['#8c9e9c','#c2c7b9','#e6e1cf'],
+ ['#aa857f','#dfb6b2','#e8d7d0'],['#8b9eae','#c0d3dc','#e3ebee'],
+ ['#a2a076','#d5d2a3','#ede6cb'],['#b39b85','#e5cfb8','#f2e5d8'],
+ ['#8b837a','#c2b8aa','#e1d8c8'],['#9d817d','#d4b2ac','#ebd8d3'],
+ ['#789b87','#b1d0b5','#e0e9d8'],['#9b8ba9','#cdbed9','#e8e0ee'],
+ ['#ae9475','#ddc19c','#f0e0c8'],['#718e9a','#a8c2c9','#dbe7e7']];
+ const housePalette=[
+ ['#b7b0a4','#ece1d0','#c9d5d7'],['#a9b3bb','#e6e8e5','#c6d1d7'],
+ ['#a88c7b','#dfc3ad','#ead9c9'],['#8d9c90','#c9d7c8','#e5e7da'],
+ ['#9d8d99','#d8cad6','#e9e0e7'],['#8799a8','#c5d6e0','#e9edf0'],
+ ['#b1a18b','#e6d8c3','#f0e7db'],['#a98f88','#dec8bf','#e9dad1'],
+ ['#9b9b8c','#d6d7c8','#ebece0'],['#8f8379','#c8b5a4','#e4d6c7'],
+ ['#b4a6a0','#e6d9d4','#f1e9e5'],['#8c9e9e','#c4d7d3','#e5ece8']];
+ const palette=isTower?towerPalette:isShop?shopPalette:isHouse?housePalette:officePalette;
+ let colors=palette[n%palette.length], [wallA,wallB,roof]=colors;
+ // Four corners, and TWO distinct outward-facing walls. Neither wall is omitted.
+ let A=[x-w/2,y-d/2],B=[x+w/2,y-d/2],C=[x+w/2,y+d/2],D=[x-w/2,y+d/2];
+ poly([[...D,0],[...C,0],[...C,h],[...D,h]],wallA,'#5e747b',.85);
+ poly([[...B,0],[...C,0],[...C,h],[...B,h]],wallB,'#5e747b',.85);
+ poly([[...A,h],[...B,h],[...C,h],[...D,h]],roof,'#6f8589',.9);
+ let floors=Math.max(1,Math.floor(h/(isTower?15:17)));
+ for(let f=0;f<floors;f++){
+  let zz=7+f*(isTower?15:17);if(zz>h-5)break;
+  for(let j=0;j<3;j++){
+   let xx=x-w/2+(j+.5)*w/3, yy=y-d/2+(j+.5)*d/3;
+   let win=isTower?'#4b849c':isShop?'#6b9496':'#769aab';
+   // windows on both outward-facing faces
+   poly([[xx-4,y+d/2+.3,zz],[xx+4,y+d/2+.3,zz],[xx+4,y+d/2+.3,zz+7],[xx-4,y+d/2+.3,zz+7]],win);
+   poly([[x+w/2+.3,yy-4,zz],[x+w/2+.3,yy+4,zz],[x+w/2+.3,yy+4,zz+7],[x+w/2+.3,yy-4,zz+7]],win);
+  }
+ }
+ if(isHouse){
+  let peak=h+14;poly([[...A,h],[...B,h],[x,y-d/2,peak]],'#536b7a','#465c69');
+  poly([[...B,h],[...C,h],[x+w/2,y,peak]],'#7c929d','#465c69');
+ }else{
+  let hh=isTower?13:6;
+  poly([[x-9,y-7,h],[x+9,y-7,h],[x+9,y+7,h],[x-9,y+7,h]],'#8a9698');
+  poly([[x-9,y+7,h],[x+9,y+7,h],[x+9,y+7,h+hh],[x-9,y+7,h+hh]],'#667d86');
+  poly([[x+9,y-7,h],[x+9,y+7,h],[x+9,y+7,h+hh],[x+9,y-7,h+hh]],'#b2b9b7');
+  if(isTower){let t=iso(x,y,h+hh);line([t,iso(x,y,h+hh+20)],'#536b72',2)}
+ }
+ if(isShop){let pp=iso(x,y+d/2+1,15);ctx.fillStyle='#a94d42';ctx.fillRect(pp.x-26,pp.y-8,52,16);ctx.fillStyle='#fff';ctx.font='bold 9px sans-serif';ctx.textAlign='center';ctx.fillText(['青空珈琲','東都堂','みつば','KITA','さくら屋','花月堂','MORI','白山商会','ひかり','TOKI','千代田屋','橘ビル'][n%12],pp.x,pp.y+3)}
+}
+function landmark(x,y,kind){
+ if(kind==='tower'){
+ // Tokyo Tower-inspired tapered four-legged lattice tower with two observation decks.
+ const red='#e54d38',white='#f2f1e9',dark='#9c3b30';
+ function radius(z){if(z<115)return 47-(z/115)*26;if(z<200)return 21-(z-115)/85*10;return 11-(z-200)/95*8}
+ const levels=[0,18,36,54,72,90,110,130,150,172,194,215,236,256];
+ for(let side of [-1,1])for(let depth of [-1,1]){
+  for(let k=0;k<levels.length-1;k++){
+   let a=levels[k],b=levels[k+1],ra=radius(a),rb=radius(b);
+   line([iso(x+side*ra,y+depth*ra,a),iso(x+side*rb,y+depth*rb,b)],k%3===1?white:red,4.5);
+  }
+ }
+ for(let k=0;k<levels.length-1;k++){
+  let a=levels[k],b=levels[k+1],ra=radius(a),rb=radius(b),color=k%3===1?white:red;
+  for(let dep of [-1,1]){
+   line([iso(x-ra,y+dep*ra,a),iso(x+ra,y+dep*ra,a)],color,2.8);
+   line([iso(x-ra,y+dep*ra,a),iso(x+rb,y+dep*rb,b)],color,2);
+   line([iso(x+ra,y+dep*ra,a),iso(x-rb,y+dep*rb,b)],color,2);
+  }
+  for(let side of [-1,1]){
+   line([iso(x+side*ra,y-ra,a),iso(x+side*ra,y+ra,a)],color,2.8);
+   line([iso(x+side*ra,y-ra,a),iso(x+side*rb,y+rb,b)],color,2);
+   line([iso(x+side*ra,y+ra,a),iso(x+side*rb,y-rb,b)],color,2);
+  }
+ }
+ function deck(z,r,height){
+  poly([[x-r,y-r,z],[x+r,y-r,z],[x+r,y+r,z],[x-r,y+r,z]],'#d9dcd8',dark,1.4);
+  poly([[x-r,y+r,z],[x+r,y+r,z],[x+r,y+r,z+height],[x-r,y+r,z+height]],'#f4f0e8',dark,1);
+  poly([[x+r,y-r,z],[x+r,y+r,z],[x+r,y+r,z+height],[x+r,y-r,z+height]],'#c9d2d1',dark,1);
+  poly([[x-r,y-r,z+height],[x+r,y-r,z+height],[x+r,y+r,z+height],[x-r,y+r,z+height]],'#db5945',dark,1.3);
+ }
+ deck(115,29,14);deck(198,17,9);
+ line([iso(x,y,265),iso(x,y,325)],'#e8e9e6',4);
+ line([iso(x,y,285),iso(x,y,315)],red,3);
+ }
+ if(kind==='skytree'){line([iso(x,y,0),iso(x,y,290)],'#a7c5d1',14);for(let z=50;z<270;z+=35){let q=iso(x,y,z);ctx.fillStyle='#83aebc';ctx.fillRect(q.x-10,q.y-3,20,6)}let p=iso(x,y,220);ctx.fillStyle='#5b9cae';ctx.fillRect(p.x-20,p.y-7,40,14)}
+ if(kind==='dome'){let p=iso(x,y,35);ctx.fillStyle='#d6e6e2';ctx.beginPath();ctx.ellipse(p.x,p.y,50,25,0,Math.PI,0);ctx.fill();ctx.strokeStyle='#679b9f';ctx.lineWidth=3;ctx.stroke()}
+}
+function tree(x,y){let p=iso(x,y,0),q=iso(x,y,18);line([p,q],'#88664a',3);ctx.fillStyle='#438d63';ctx.beginPath();ctx.arc(q.x,q.y,8,0,7);ctx.fill();ctx.fillStyle='#69b17c';ctx.beginPath();ctx.arc(q.x-3,q.y-3,4,0,7);ctx.fill()}
+function station(s){
+ // Ground-level entrance, with two visible walls and a gabled roof.
+ const x=s.x,y=s.y, a=track[(s.trackIndex+29)%30],b=track[(s.trackIndex+1)%30];
+ const angle=Math.atan2(b.y-a.y,b.x-a.x), ux=Math.cos(angle),uy=Math.sin(angle),vx=-uy,vy=ux;
+ function pt(t,n,z){return [x+ux*t+vx*n,y+uy*t+vy*n,z]}
+ function face(arr,color,stroke='#536b76'){poly(arr.map(q=>pt(...q)),color,stroke,.9)}
+ face([[-22,21,0],[22,21,0],[22,21,25],[-22,21,25]],'#eee5d6');
+ face([[22,-3,0],[22,21,0],[22,21,25],[22,-3,25]],'#b3c5ca');
+ face([[-26,-7,26],[26,-7,26],[26,25,26],[-26,25,26]],'#5d7f99');
+ face([[-26,-7,26],[0,-7,39],[0,25,39],[-26,25,26]],'#91afc2');
+ face([[0,-7,39],[26,-7,26],[26,25,26],[0,25,39]],'#587b95');
+ const sign=iso(...pt(0,22,20));ctx.fillStyle='#f7faf8';ctx.fillRect(sign.x-14,sign.y-5,28,9);ctx.fillStyle='#254d5b';ctx.font='bold 7px sans-serif';ctx.textAlign='center';ctx.fillText('JR',sign.x,sign.y+2);
+}
+function platform(s){
+ // Platforms are raised beside the rail rather than represented by a dot.
+ const x=s.x,y=s.y,idx=s.trackIndex;
+ const a=track[(idx+29)%30],b=track[(idx+1)%30],dx=b.x-a.x,dy=b.y-a.y,len=Math.hypot(dx,dy)||1;
+ const ux=dx/len,uy=dy/len,vx=-uy,vy=ux;
+ const pt=(t,n,z)=>[x+ux*t+vx*n,y+uy*t+vy*n,z];
+ const face=(coords,fill,stroke='#64747a')=>poly(coords.map(q=>pt(...q)),fill,stroke,.85);
+ // Side platform on outer side of the tracks. Track centre is n=0.
+ face([[-30,14,20],[30,14,20],[30,36,20],[-30,36,20]],'#9cabb2');
+ face([[-30,14,20],[30,14,20],[30,14,27],[-30,14,27]],'#b6b9b1');
+ face([[-30,14,27],[30,14,27],[30,36,27],[-30,36,27]],'#e4e0d5');
+ face([[-29,15,27],[29,15,27],[29,18,27],[-29,18,27]],'#e9b93d');
+ for(let t=-22;t<=22;t+=11){face([[t,15,27.3],[t+5,15,27.3],[t+5,17,27.3],[t,17,27.3]],'#f5dc77','#cda63e')}
+ // Slim pillars and pitched canopy, kept short enough not to hide the train.
+ for(let t of [-23,0,23]){const p=iso(...pt(t,29,28)),q=iso(...pt(t,29,44));line([p,q],'#697c84',2.2)}
+ face([[-32,21,45],[32,21,45],[32,38,45],[-32,38,45]],'#6e8798');
+ face([[-34,19,45],[34,19,45],[34,30,51],[-34,30,51]],'#8ea9b9');
+ face([[-34,30,51],[34,30,51],[34,40,45],[-34,40,45]],'#55768c');
+}
+function draw(){let rect=stage.getBoundingClientRect();let w=rect.width,h=rect.height;if(W!==w||H!==h){W=w;H=h;dpr=Math.min(devicePixelRatio||1,2);c.width=Math.round(w*dpr);c.height=Math.round(h*dpr)}ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,W,H);let bg=ctx.createLinearGradient(0,0,0,H);bg.addColorStop(0,'#dbeaf0');bg.addColorStop(1,'#bcd6d6');ctx.fillStyle=bg;ctx.fillRect(0,0,W,H);ctx.save();ctx.translate(W/2+panX,H/2+panY+110);ctx.scale(zoom,zoom);ctx.translate(-iso(WORLD/2,HEIGHT/2).x,-iso(WORLD/2,HEIGHT/2).y);poly([[0,0,-8],[WORLD,0,-8],[WORLD,HEIGHT,-8],[0,HEIGHT,-8]],'#c6d4ca','#9aaeb0',3);poly([[0,0,0],[WORLD,0,0],[WORLD,HEIGHT,0],[0,HEIGHT,0]],'#e4dfd3','#a7b5af',3);
+// city blocks, streets, crosswalks
+for(let i=0;i<30;i++){let x=i*49;poly([[x-7,0,1],[x+7,0,1],[x+7,HEIGHT,1],[x-7,HEIGHT,1]],'#929ca1');if(i%3===0)poly([[x-1,0,2],[x+1,0,2],[x+1,HEIGHT,2],[x-1,HEIGHT,2]],'#c6bda6')}for(let j=0;j<24;j++){let y=j*45;poly([[0,y-7,1],[WORLD,y-7,1],[WORLD,y+7,1],[0,y+7,1]],'#929ca1')}
+let objects=[...buildings,...extra].map(b=>({kind:'building',obj:b,sort:b.x+b.y}));stations.forEach(s=>objects.push({kind:'station',obj:s,sort:s.x+s.y+50}));objects.sort((a,b)=>a.sort-b.sort);for(let o of objects){if(o.kind==='station')station(o.obj);else block(o.obj)}
+// Raised, visible Yamanote track, rendered above the buildings so it cannot disappear behind them.
+let points=track.map(p=>iso(p.x,p.y,23));
+line([...points,points[0]],'#43525a',23);
+line([...points,points[0]],'#a6adb0',18);
+for(let i=0;i<track.length;i++){
+ let a=track[i],b=track[(i+1)%track.length];
+ for(let j=0;j<7;j++){
+  let t=j/7,x=a.x+(b.x-a.x)*t,y=a.y+(b.y-a.y)*t;
+  let vx=b.x-a.x,vy=b.y-a.y,m=Math.hypot(vx,vy)||1;
+  line([iso(x-vy/m*13,y+vx/m*13,24),iso(x+vy/m*13,y-vx/m*13,24)],'#695f56',2.5);
+ }
+}
+for(let offset of [-6,6]){
+ let railPoints=track.map((p,i)=>{let before=track[(i+track.length-1)%track.length],after=track[(i+1)%track.length],vx=after.x-before.x,vy=after.y-before.y,m=Math.hypot(vx,vy)||1;return iso(p.x-vy/m*offset,p.y+vx/m*offset,25)});
+ line([...railPoints,railPoints[0]],'#f2f4f1',3.5);
+}
+for(let i=0;i<track.length;i++){let a=iso(track[i].x,track[i].y,22),b=iso(track[i].x,track[i].y,0);line([a,b],'#657b80',2.8)}
+// Render platforms above the elevated rails, before trains so cars remain visible.
+for(const s of stations){if(s.trackIndex>=0)platform(s)}
+landmark(510,490,'tower');landmark(1120,240,'skytree');landmark(830,660,'dome');
+// Isometric 3D train: each car has a roof, two vertical sides, end caps, doors and windows.
+function trainCar(x,y,dx,dy,lead){
+ const L=42,half=9,z0=21,z1=39,mag=Math.hypot(dx,dy)||1;
+ let ux=dx/mag,uy=dy/mag,vx=-uy,vy=ux;
+ function corner(along,side,z){return iso(x+ux*along+vx*side,y+uy*along+vy*side,z)}
+ const A=corner(-L/2,-half,z0),B=corner(L/2,-half,z0),C=corner(L/2,half,z0),D=corner(-L/2,half,z0);
+ const At=corner(-L/2,-half,z1),Bt=corner(L/2,-half,z1),Ct=corner(L/2,half,z1),Dt=corner(-L/2,half,z1);
+ // Visible walls are shaded differently to make volume unmistakable.
+ path([D,C,Ct,Dt],'#d7e0e0','#4a6065',1.2);
+ path([B,C,Ct,Bt],'#a7b8bb','#4a6065',1.2);
+ path([A,B,Bt,At],'#f0f3f1','#4a6065',1.1);
+ path([A,D,Dt,At],'#9baeb2','#4a6065',1.1);
+ path([At,Bt,Ct,Dt],'#e9f0ed','#60787a',1.3);
+ // Raised roof vent.
+ path([corner(-9,-3,z1+1),corner(10,-3,z1+1),corner(10,3,z1+1),corner(-9,3,z1+1)],'#b6c5c5','#819494',.8);
+ // Full-length Yamanote green stripe, along BOTH sides.
+ for(const side of [-1,1]){
+  const face=[corner(-L/2,side,z0+5),corner(L/2,side,z0+5),corner(L/2,side,z0+10),corner(-L/2,side,z0+10)];
+  path(face,'#69ad71');
+  for(let j=0;j<4;j++){
+   const aa=-L/2+4+j*9;
+   path([corner(aa,side,z0+12),corner(aa+6,side,z0+12),corner(aa+6,side,z0+17),corner(aa,side,z0+17)],'#426d7b','#e8f4f4',.45);
+  }
+  // Door frame between windows.
+  line([corner(1,side,z0+1),corner(1,side,z0+17)],'#738f92',1);
+ }
+ // Front windshield and lights at the leading end.
+ if(lead){
+  path([corner(L/2,-6,z0+11),corner(L/2,6,z0+11),corner(L/2,6,z0+17),corner(L/2,-6,z0+17)],'#345d69','#edf7f3',.8);
+  for(let side of [-6,6]){let q=corner(L/2,side,z0+5);ctx.fillStyle='#fff2a4';ctx.beginPath();ctx.arc(q.x,q.y,1.8,0,Math.PI*2);ctx.fill()}
+ }
+}
+// Pause only at stations that have received a name. Stops last 2.2 seconds.
+let now=performance.now(),dt=Math.min((now-(window._lastTrainFrame||now))/1000,.08);window._lastTrainFrame=now;
+if(window._stopRemaining>0){window._stopRemaining-=dt;if(window._stopRemaining<0)window._stopRemaining=0;}
+else {
+ let before=trainTime,after=before+dt*.44;
+ for(let s of stations){
+  if(!placed[s.id] || s.trackIndex===undefined || s.trackIndex<0)continue;
+  let idx=s.trackIndex;
+  if(Math.floor((before-idx)/30)<Math.floor((after-idx)/30)){
+    trainTime=idx+30*Math.floor((after-idx)/30);
+    window._stopRemaining=2.2;
+    window._stoppingAt=s.id;
+    break;
+  }
+ }
+ if(!window._stopRemaining){trainTime=after;window._stoppingAt=null;}
+}
+let tt=((trainTime%track.length)+track.length)%track.length;
+for(let car=5;car>=0;car--){
+ let t=(tt-car*.16+track.length)%track.length,i=Math.floor(t),f=t-i;
+ let a=track[i],b=track[(i+1)%track.length];
+ let x=a.x+(b.x-a.x)*f,y=a.y+(b.y-a.y)*f;
+ trainCar(x,y,b.x-a.x,b.y-a.y,car===0);
+}
+// One compact station nameplate per station, no double white boxes or tall stalks.
+for(let s of stations){
+ const foot=iso(s.x,s.y,27),marker=iso(s.x,s.y,64);
+ ctx.beginPath();ctx.arc(foot.x,foot.y,4,0,Math.PI*2);ctx.fillStyle='#158c62';ctx.fill();
+ const label=placed[s.id]||'';ctx.font='bold 10px sans-serif';
+ const boxW=placed[s.id]?Math.max(33,Math.min(135,ctx.measureText(label).width+12)):33;
+ ctx.fillStyle=window._stoppingAt===s.id&&window._stopRemaining>0?'#fff0b4':'#f9faf7';ctx.strokeStyle='#37736a';ctx.lineWidth=1;
+ ctx.beginPath();ctx.roundRect(marker.x-boxW/2,marker.y-9,boxW,18,3);ctx.fill();ctx.stroke();
+ ctx.fillStyle='#194a46';ctx.textAlign='center';ctx.fillText(label,marker.x,marker.y+3.5);
+}
+if(hover&&tool!=='move'){let p=iso(hover.x,hover.y,0);ctx.strokeStyle='#087b84';ctx.lineWidth=2;ctx.beginPath();ctx.arc(p.x,p.y,22,0,Math.PI*2);ctx.stroke()}ctx.restore();requestAnimationFrame(draw)}
+function worldToScreen(x,y,z=0){let p=iso(x,y,z),center=iso(WORLD/2,HEIGHT/2);return {x:W/2+panX+(p.x-center.x)*zoom,y:H/2+panY+110+(p.y-center.y)*zoom}}function screenToWorld(x,y){let center=iso(WORLD/2,HEIGHT/2),px=(x-W/2-panX)/zoom+center.x,py=(y-H/2-panY-110)/zoom+center.y;return {x:py/(2*.405)+px/(2*.78),y:py/(2*.405)-px/(2*.78)}}function nearestStation(x,y){let best=null,dist=999;for(let s of stations){let p=worldToScreen(s.x,s.y,64),d=Math.hypot(x-p.x,y-p.y);if(d<dist){dist=d;best=s}}return dist<Math.max(17,25*zoom)?best:null}function position(e){let r=c.getBoundingClientRect();return {x:e.clientX-r.left,y:e.clientY-r.top}}
+let start=null;c.addEventListener('pointerdown',e=>{let p=position(e);start={...p,panX,panY,moved:false};c.setPointerCapture(e.pointerId);if(tool==='move')c.style.cursor='grabbing'});c.addEventListener('pointermove',e=>{let p=position(e);if(start){let dx=p.x-start.x,dy=p.y-start.y;if(Math.hypot(dx,dy)>5)start.moved=true;if(tool==='move'||start.moved){panX=start.panX+dx;panY=start.panY+dy}}else hover=screenToWorld(p.x,p.y)});c.addEventListener('pointerup',e=>{if(!start)return;let p=position(e);if(!start.moved){let s=nearestStation(p.x,p.y);if(s&&tool==='move'&&placed[s.id]){delete placed[s.id];document.getElementById('status').textContent='駅名を消しました';}else if(tool!=='move'){let q=screenToWorld(p.x,p.y);if(q.x>0&&q.x<WORLD&&q.y>0&&q.y<HEIGHT){if(tool==='station'){let id=stations.length;stations.push({id,x:q.x,y:q.y,trackIndex:-1});}else{let h=tool==='tower'?130:tool==='office'?85:tool==='shop'?38:tool==='house'?37:0;extra.push({x:q.x,y:q.y,w:tool==='tower'?56:48,d:tool==='tower'?50:42,h,type:tool,seed:extra.length+999})}}}}start=null;c.style.cursor=tool==='move'?'grab':'crosshair'});c.addEventListener('pointercancel',()=>start=null);c.addEventListener('wheel',e=>{e.preventDefault();zoom=Math.max(.38,Math.min(2.2,zoom*(e.deltaY<0?1.1:.9)))},{passive:false});document.getElementById('plus').onclick=()=>zoom=Math.min(2.2,zoom*1.2);document.getElementById('minus').onclick=()=>zoom=Math.max(.38,zoom/1.2);document.getElementById('home').onclick=()=>{zoom=.83;panX=panY=0};document.getElementById('undo').onclick=()=>extra.pop();document.getElementById('reset').onclick=()=>{if(confirm('街を最初の状態に戻しますか？'))init()};
+// Pointer-driven label dragging supports mouse and touch.
+cards.addEventListener('pointerdown',e=>{let t=e.target.closest('.chip');if(!t)return;e.preventDefault();let g=document.createElement('div');g.textContent=t.dataset.name;Object.assign(g.style,{position:'fixed',zIndex:1000,pointerEvents:'none',background:'#fff',border:'2px solid #27838a',borderRadius:'6px',padding:'5px 9px',fontWeight:'bold',boxShadow:'0 3px 10px #0003'});document.body.appendChild(g);cardDrag={name:t.dataset.name,ghost:g};moveGhost(e)});function moveGhost(e){if(cardDrag){cardDrag.ghost.style.left=e.clientX+12+'px';cardDrag.ghost.style.top=e.clientY+12+'px'}}window.addEventListener('pointermove',moveGhost);window.addEventListener('pointerup',e=>{if(!cardDrag)return;let r=c.getBoundingClientRect();let s=nearestStation(e.clientX-r.left,e.clientY-r.top);if(s&&e.clientX>=r.left&&e.clientX<=r.right&&e.clientY>=r.top&&e.clientY<=r.bottom){placed[s.id]=cardDrag.name;document.getElementById('status').textContent='「'+cardDrag.name+'」を駅につけました！'}cardDrag.ghost.remove();cardDrag=null});requestAnimationFrame(draw);
+</script></html>
